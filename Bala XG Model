@@ -1,0 +1,106 @@
+import pandas as pd
+from sklearn.preprocessing import StandardScaler  # For feature scaling
+from sklearn.model_selection import train_test_split, KFold, cross_val_score, RandomizedSearchCV  # For Cross Validation
+from xgboost import XGBRegressor  # Import XGBoostRegressor
+from sklearn.metrics import mean_squared_error, r2_score
+import numpy as np
+
+# Seed for reproducibility
+np.random.seed(0)
+
+# Loading CSV file into a DataFrame
+df = pd.read_csv('data.csv')
+
+# Dropping the 'Unnamed: 0' column as if it doesn't contain any meaningful information
+df = df.drop(columns=['Unnamed: 0'])
+
+# Data preprocessing step
+
+# Drop duplicates
+df = df.drop_duplicates()
+
+# Convert 'Time' column to datetime data type
+df['Time'] = pd.to_datetime(df['Time'])
+
+# Convert 'Time' column to Unix timestamp
+df['Time'] = df['Time'].apply(lambda x: x.timestamp())
+
+# Ensure all columns are of numeric data types
+df = df.apply(pd.to_numeric, errors='coerce')
+
+# Feature scaling using StandardScaler
+scaler = StandardScaler()
+df_scaled = df.copy()  # Create a copy of the DataFrame
+
+# Excluding non-numeric columns and the target variable ('SOG')
+columns_to_scale = df_scaled.columns[df_scaled.columns != 'SOG']
+
+# Scaling the selected columns
+df_scaled[columns_to_scale] = scaler.fit_transform(df_scaled[columns_to_scale])
+
+# Pearson correlation feature selection function
+def correlation_with_target(dataset, target, n):
+    df = dataset.copy()
+    target_corr = df.corr()[target]
+    relevant_features = target_corr.abs().sort_values(ascending=False)[:n].index
+    df = df[relevant_features]
+    return df
+
+# correlation function to select top n features most related to SOG
+selected_data = correlation_with_target(df_scaled, 'SOG', 15)  # Select top 15 features
+
+
+# Print the selected features
+print("Selected Features:")
+print(selected_data.columns)
+
+# Define the features (X) and the target (y)
+X = selected_data.drop(columns=['SOG'])
+y = selected_data['SOG']
+
+# Splitting the data into training and testing sets (80% training, 20% testing)
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+# K-fold Cross Validator
+kfold = KFold(n_splits=10)
+
+#  XGBoostRegressor
+xgb = XGBRegressor()
+
+# Parameter distribution for hyperparameter tuning
+param_dist = {
+    'n_estimators': [10, 20, 30, 50, 100, 200, 500],
+    'learning_rate': [0.001, 0.01, 0.05, 0.1, 0.5, 1.0, 2.0]
+}
+
+# RandomizedSearchCV with  iterations
+random_search = RandomizedSearchCV(xgb, param_dist, cv=kfold, scoring='neg_mean_squared_error', n_iter=9, random_state=0)
+
+# Fit RandomizedSearchCV
+random_search.fit(X_train, y_train)
+
+# Best parameters
+best_params = random_search.best_params_
+
+print(f"Best parameters: {best_params}")
+
+# Training XGBoostRegressor with the best parameters
+xgb_best = XGBRegressor(n_estimators=best_params['n_estimators'], learning_rate=best_params['learning_rate'])
+
+# Fitting the model with the best parameters
+xgb_best.fit(X_train, y_train)
+
+# predictions on the test set
+predictions_best = xgb_best.predict(X_test)
+
+# Evaluating the model's performance on the test set
+mse_best = mean_squared_error(y_test, predictions_best)
+rmse_best = np.sqrt(mse_best)
+
+print(f"Mean Squared Error on Test Set with Best Parameters: {mse_best}")
+print(f"Root Mean Squared Error on Test Set with Best Parameters: {rmse_best}")
+
+#  R-squared score
+r2_best = r2_score(y_test, predictions_best)
+
+print(f"R-squared Score on Test Set with Best Parameters: {r2_best}")
